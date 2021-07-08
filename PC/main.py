@@ -14,13 +14,12 @@ selected_device = []
 
 class DataToFile:
 
-    column_names = ["time","data_value"]
+    column_names = ["time", "data_value"]
 
     def __init__(self, write_path):
         self.path = write_path
 
     def write_to_csv(self, times: [int], data_values: [Any]):
-        print("step5")
         if len(set([len(times), len(data_values)])) > 1:
             raise Exception("Not all data lists are the same length.")
 
@@ -29,7 +28,6 @@ class DataToFile:
                 print("Created file.")
                 f.write(",".join([str(name) for name in self.column_names]) + ",\n")
             else:
-                print(data_values)
                 for i in range(len(data_values)):
                     f.write(f"{times[i]},{data_values[i]},\n")
 
@@ -44,7 +42,7 @@ class Connection:
         read_characteristic: str,
         write_characteristic: str,
         data_dump_handler: Callable[[str, Any], None],
-        data_dump_size: int = 3,
+        data_dump_size: int = 1,
     ):
         self.loop = loop
         self.read_characteristic = read_characteristic
@@ -60,7 +58,7 @@ class Connection:
         self.rx_timestamps = []
         self.rx_delays = []
 
-    def on_disconnect(self, client: BleakClient, future: asyncio.Future):
+    def on_disconnect(self, client: BleakClient):
         self.connected = False
         # Put code here to handle what happens on disconnet.
         print(f"Disconnected from {self.connected_device.name}!")
@@ -84,9 +82,7 @@ class Connection:
             return
         try:
             await self.client.connect()
-            print("step1")
             self.connected = await self.client.is_connected()
-            print("step2")
             if self.connected:
                 print(F"Connected to {self.connected_device.name}")
                 self.client.set_disconnected_callback(self.on_disconnect)
@@ -127,24 +123,21 @@ class Connection:
         print(f"Connecting to {devices[response].name}")
         self.connected_device = devices[response]
         self.client = BleakClient(devices[response].address, loop=self.loop)
-        print("step3")
 
     def record_time_info(self):
-        present_time = datetime.now()
+        present_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
         self.rx_timestamps.append(present_time)
-        # self.rx_delays.append((present_time - self.last_packet_time).microseconds)
-        # self.last_packet_time = present_time
+        self.last_packet_time = present_time
 
     def clear_lists(self):
         self.rx_data.clear()
-        self.rx_delays.clear()
         self.rx_timestamps.clear()
 
     def notification_handler(self, sender: str, data: Any):
-        self.rx_data.append(int.from_bytes(data, byteorder="big"))
+        self.rx_data.append(data.decode('utf-8'))
         self.record_time_info()
         if len(self.rx_data) >= self.dump_size:
-            self.data_dump_handler(self.rx_data, self.rx_timestamps)
+            self.data_dump_handler(self.rx_timestamps, self.rx_data)
             self.clear_lists()
 
 
@@ -156,8 +149,8 @@ async def user_console_manager(connection: Connection):
         if connection.client and connection.connected:
             input_str = await ainput("Enter string: ")
             bytes_to_send = bytearray(map(ord, input_str))
-            # await connection.client.write_gatt_char(write_characteristic, bytes_to_send)
-            # print(f"Sent: {input_str}")
+            await connection.client.write_gatt_char(write_characteristic, bytes_to_send)
+            print(f"Sent: {input_str}")
         else:
             await asyncio.sleep(2.0, loop=loop)
 
@@ -172,8 +165,8 @@ async def main():
 #############
 # App Main
 #############
-read_characteristic = "c1a72a58-8875-41d1-9b66-0ae2116393fe"
-write_characteristic = "c1a72a3d-8875-41d1-9b66-0ae2116393fe"
+read_characteristic = "00002A58-0000-1000-8000-00805f9b34fb"
+write_characteristic = "00002A3D-0000-1000-8000-00805f9b34fb"
 
 if __name__ == "__main__":
 
@@ -182,11 +175,11 @@ if __name__ == "__main__":
 
     data_to_file = DataToFile(output_file)
     connection = Connection(
-        loop, read_characteristic, write_characteristic, data_to_file.write_to_csv
+        loop, read_characteristic, None, data_to_file.write_to_csv
     )
     try:
         asyncio.ensure_future(connection.manager())
-        asyncio.ensure_future(user_console_manager(connection))
+        # asyncio.ensure_future(user_console_manager(connection))
         asyncio.ensure_future(main())
         loop.run_forever()
     except KeyboardInterrupt:
