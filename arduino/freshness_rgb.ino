@@ -1,3 +1,7 @@
+// https://rootsaid.com/arduino-ble-example/
+// Characteristic info.
+// https://www.arduino.cc/en/Reference/ArduinoBLEBLECharacteristicBLECharacteristic
+
 #include <ArduinoBLE.h>
 
 #define s0  2
@@ -6,42 +10,59 @@
 #define s3  5
 #define out 6
 
-// Device Name
-const char* nameOfPeripheral = "Color";
-const char* uuidOfService = "c1a7dce8-8875-41d1-9b66-0ae2116393fe";
-const char* uuidOfRxChar = "c1a72a3d-8875-41d1-9b66-0ae2116393fe";
-const char* uuidOfTxChar = "c1a72a58-8875-41d1-9b66-0ae2116393fe";
+// Device name
+const char* nameOfPeripheral = "ColorMonitor";
+const char* uuidOfService = "0000181a-0000-1000-8000-00805f9b34fb";
+const char* uuidOfRxChar = "00002A3D-0000-1000-8000-00805f9b34fb";
+const char* uuidOfTxChar = "00002A58-0000-1000-8000-00805f9b34fb";
 
 // BLE Service
-BLEService RGBService(uuidOfService);
+BLEService colorService(uuidOfService);
 
-// Setup the incoming data characteristic (Rx)
-const int WRITE_BUFFER_SIZE = 256;
-bool WRITE_BUFFER_FIXED_LENGTH = false;
-
-// Rx/Tx Characteristics
-BLECharacteristic rxChar(uuidOfRxChar, BLEWriteWithoutResponse | BLEWrite, WRITE_BUFFER_SIZE, WRITE_BUFFER_FIXED_LENGTH);
-BLEByteCharacteristic txChar(uuidOfTxChar, BLERead | BLENotify | BLEBroadcast);
+// RX / TX Characteristics
+BLEStringCharacteristic txChar(uuidOfTxChar, BLERead | BLENotify | BLEBroadcast, 12);
 
 // Buffer to read samples into, each sample is 16-bits
-short sampleBuffer[3];
 volatile int samplesRead_R;
 volatile int samplesRead_G;
 volatile int samplesRead_B;
 
-void startBLE(){
-  if (!BLE.begin()){
-    Serial.println("Starting BLE failed!");
-    while(1);
+// function prototype to define default timeout value
+static unsigned int newPulseIn(const byte pin, const byte state, const unsigned long timeout = 1000000L);
+
+// using a macro to avoid function call overhead
+#define WAIT_FOR_PIN_STATE(state) \
+  while (digitalRead(pin) != (state)) { \
+    if (micros() - timestamp > timeout) { \
+      return 0; \
+    } \
   }
+
+static unsigned int newPulseIn(const byte pin, const byte state, const unsigned long timeout) {
+  unsigned long timestamp = micros();
+  WAIT_FOR_PIN_STATE(!state);
+  WAIT_FOR_PIN_STATE(state);
+  timestamp = micros();
+  WAIT_FOR_PIN_STATE(!state);
+  return micros() - timestamp;
 }
 
 
+/*
+ *  MAIN
+ */
 void setup() {
-  // put your setup code here, to run once:
+
+  // Start serial.
   Serial.begin(9600);
 
-  while(!Serial);
+  // Ensure serial port is ready.
+  while (!Serial);
+
+  // Prepare LED pins.
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LEDR, OUTPUT);
+  pinMode(LEDG, OUTPUT);
 
   //TCS3200
   pinMode(s0, OUTPUT);
@@ -53,22 +74,23 @@ void setup() {
   digitalWrite(s0,  HIGH);
   digitalWrite(s1,  HIGH);
 
-  //BLE
+  // Start BLE.
   startBLE();
 
+  // Create BLE service and characteristics.
+  BLE.setDeviceName("Arduino Nano 33 BLE");
   BLE.setLocalName(nameOfPeripheral);
-  BLE.setAdvertisedService(RGBService);
-  RGBService.addCharacteristic(rxChar);
-  RGBService.addCharacteristic(txChar);
-  BLE.addService(RGBService);
+  BLE.setAdvertisedService(colorService);
+  colorService.addCharacteristic(txChar);
+  BLE.addService(colorService);
 
+  // Bluetooth LE connection handlers.
   BLE.setEventHandler(BLEConnected, onBLEConnected);
   BLE.setEventHandler(BLEDisconnected, onBLEDisconnected);
-
-  rxChar.setEventHandler(BLEWritten, onRxCharValueUpdate);
-
+  
+  // Let's tell devices about us.
   BLE.advertise();
-
+  
   // Print out full UUID and MAC address.
   Serial.println("Peripheral advertising info: ");
   Serial.print("Name: ");
@@ -76,17 +98,16 @@ void setup() {
   Serial.print("MAC: ");
   Serial.println(BLE.address());
   Serial.print("Service UUID: ");
-  Serial.println(RGBService.uuid());
-  Serial.print("rxCharacteristic UUID: ");
-  Serial.println(uuidOfRxChar);
+  Serial.println(colorService.uuid());
   Serial.print("txCharacteristics UUID: ");
   Serial.println(uuidOfTxChar);
 
   Serial.println("Bluetooth device active, waiting for connections...");
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
+
+void loop()
+{
   BLEDevice central = BLE.central();
   
   if (central)
@@ -98,45 +119,39 @@ void loop() {
       // Send the RGB values to the central device.
       digitalWrite(s2, LOW);
       digitalWrite(s3, LOW);
-      samplesRead_R = pulseIn(out, LOW);
-      sampleBuffer[0] = samplesRead_R;
-      delay(20);
+      samplesRead_R = newPulseIn(out, LOW);
+      samplesRead_R = map(samplesRead_R,60,15,0,100);
 
       digitalWrite(s2, LOW);
       digitalWrite(s3, HIGH);
-      samplesRead_B = pulseIn(out, LOW);
-      sampleBuffer[1] = samplesRead_B;
-      delay(20);
+      samplesRead_B = newPulseIn(out, LOW);
+      samplesRead_B = map(samplesRead_B,80,11,0,100);
 
       digitalWrite(s2, HIGH);
       digitalWrite(s3, HIGH);
-      samplesRead_G = pulseIn(out, LOW);
-      sampleBuffer[2] = samplesRead_G;
-      delay(20);
+      samplesRead_G = newPulseIn(out, LOW);
+      samplesRead_G = map(samplesRead_G,80,20,0,100);
 
-//      sampleBuffer = {samplesRead_R, samplesRead_B, samplesRead_G};
-
-      for (int i = 0; i < 3; i++){
-        txChar.writeValue(sampleBuffer[i]);
-      }
+      String sample = String(samplesRead_R) + "," + String(samplesRead_B) + "," + String(samplesRead_G);
+      Serial.println(sample);
+      txChar.writeValue(sample);
+      delay(500);
     }
   } else {
     disconnectedLight();
   }
 }
 
-void onRxCharValueUpdate(BLEDevice central, BLECharacteristic characteristic) {
-  // central wrote new value to characteristic, update LED
-  Serial.print("Characteristic event, read: ");
-  byte test[256];
-  int dataLength = rxChar.readValue(test, 256);
 
-  for(int i = 0; i < dataLength; i++) {
-    Serial.print((char)test[i]);
+/*
+ *  BLUETOOTH
+ */
+void startBLE() {
+  if (!BLE.begin())
+  {
+    Serial.println("starting BLE failed!");
+    while (1);
   }
-  Serial.println();
-  Serial.print("Value length = ");
-  Serial.println(rxChar.valueLength());
 }
 
 void onBLEConnected(BLEDevice central) {
@@ -151,6 +166,9 @@ void onBLEDisconnected(BLEDevice central) {
   disconnectedLight();
 }
 
+/*
+ * LEDS
+ */
 void connectedLight() {
   digitalWrite(LEDR, LOW);
   digitalWrite(LEDG, HIGH);
